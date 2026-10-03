@@ -1,121 +1,135 @@
-import cv2
 import argparse
-import numpy as np
 
-def highlightFace(net, frame, conf_threshold=0.7):
-    frameOpencvDnn = frame.copy()
-    frameHeight = frameOpencvDnn.shape[0]
-    frameWidth = frameOpencvDnn.shape[1]
-    blob = cv2.dnn.blobFromImage(frameOpencvDnn, 1.0, (300, 300), [104, 117, 123], True, False)
+import cv2
 
+
+def highlight_face(net, frame, conf_threshold=0.7):
+    """Detect faces and return an annotated frame plus bounding boxes."""
+    frame_height, frame_width = frame.shape[:2]
+    blob = cv2.dnn.blobFromImage(
+        frame, 1.0, (300, 300), [104, 117, 123], True, False
+    )
     net.setInput(blob)
     detections = net.forward()
-    faceBoxes = []
+
+    face_boxes = []
     for i in range(detections.shape[2]):
-        confidence = detections[0, 0, i, 2]
-        if confidence > conf_threshold:
-            x1 = int(detections[0, 0, i, 3] * frameWidth)
-            y1 = int(detections[0, 0, i, 4] * frameHeight)
-            x2 = int(detections[0, 0, i, 5] * frameWidth)
-            y2 = int(detections[0, 0, i, 6] * frameHeight)
-            faceBoxes.append([x1, y1, x2, y2])
-            cv2.rectangle(frameOpencvDnn, (x1, y1), (x2, y2), (0, 255, 0), int(round(frameHeight / 150)), 8)
-    return frameOpencvDnn, faceBoxes
+        confidence = float(detections[0, 0, i, 2])
+        if confidence <= conf_threshold:
+            continue
 
-def detectHands(frame, faceBox):
-    # This is a simplified example for detecting hands near the face
-    # You might need a more complex model or technique for accurate hand detection
-    hands = []
-    face_height = faceBox[3] - faceBox[1]
-    y_start = max(0, faceBox[1] - int(1.5 * face_height))
-    y_end = faceBox[1]  # Check above the face
-    hands.append((faceBox[0], y_start, faceBox[2], y_end))
-    return hands
+        x1 = max(0, int(detections[0, 0, i, 3] * frame_width))
+        y1 = max(0, int(detections[0, 0, i, 4] * frame_height))
+        x2 = min(frame_width - 1, int(detections[0, 0, i, 5] * frame_width))
+        y2 = min(frame_height - 1, int(detections[0, 0, i, 6] * frame_height))
 
-def checkSOSGesture(faceBox, hands):
-    # Simplified logic to detect SOS if hand is raised above the face
-    for hand in hands:
-        if hand[1] < faceBox[1]:  # Hand is above the face
-            return True
-    return False
+        if x2 <= x1 or y2 <= y1:
+            continue
 
-# Create an argument parser
-parser = argparse.ArgumentParser()
-parser.add_argument('--image')
-args = parser.parse_args()
+        face_boxes.append([x1, y1, x2, y2])
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-# Define the paths for the models and prototxt files
-faceProto = "opencv_face_detector.pbtxt"
-faceModel = "opencv_face_detector_uint8.pb"
-ageProto = "age_deploy.prototxt"
-ageModel = "age_net.caffemodel"
-genderProto = "gender_deploy.prototxt"
-genderModel = "gender_net.caffemodel"
+    return frame, face_boxes
 
-# Define the mean values for the model
-MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
-ageList = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
-genderList = ['Male', 'Female']
 
-# Load the models
-faceNet = cv2.dnn.readNet(faceModel, faceProto)
-ageNet = cv2.dnn.readNet(ageModel, ageProto)
-genderNet = cv2.dnn.readNet(genderModel, genderProto)
+def detect_hands(frame, face_box):
+    """Return the simplified region above a face used by the SOS demo."""
+    x1, y1, x2, _ = face_box
+    face_height = max(1, face_box[3] - y1)
+    y_start = max(0, y1 - int(1.5 * face_height))
+    return [(x1, y_start, x2, y1)]
 
-# Open the video file or webcam
-video = cv2.VideoCapture(args.image if args.image else 0)
-padding = 20
 
-# Initialize gender counters
-male_count = 0
-female_count = 0
+def check_sos_gesture(face_box, hands):
+    return any(hand[1] < face_box[1] for hand in hands)
 
-# Loop over the frames from the video
-while cv2.waitKey(1) < 0:
-    hasFrame, frame = video.read()
-    if not hasFrame:
-        cv2.waitKey()
-        break
 
-    resultImg, faceBoxes = highlightFace(faceNet, frame)
-    if not faceBoxes:
-        print("No face detected")
+def main():
+    parser = argparse.ArgumentParser(
+        description="OpenCV age/gender demo with a simplified SOS region detector."
+    )
+    parser.add_argument("--image", help="Video file path. Omit to use the webcam.")
+    args = parser.parse_args()
 
-    male_count = 0  # Reset counts for each frame
-    female_count = 0
+    face_proto = "opencv_face_detector.pbtxt"
+    face_model = "opencv_face_detector_uint8.pb"
+    age_proto = "age_deploy.prototxt"
+    age_model = "age_net.caffemodel"
+    gender_proto = "gender_deploy.prototxt"
+    gender_model = "gender_net.caffemodel"
 
-    genders = []
-    for faceBox in faceBoxes:
-        face = frame[max(0, faceBox[1] - padding): min(faceBox[3] + padding, frame.shape[0] - 1), max(0, faceBox[0] - padding): min(faceBox[2] + padding, frame.shape[1] - 1)]
+    model_mean_values = (78.4263377603, 87.7689143744, 114.895847746)
+    age_list = ["(0-2)", "(4-6)", "(8-12)", "(15-20)", "(25-32)", "(38-43)", "(48-53)", "(60-100)"]
+    gender_list = ["Male", "Female"]
 
-        blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
-        genderNet.setInput(blob)
-        genderPreds = genderNet.forward()
-        gender = genderList[genderPreds[0].argmax()]
-        genders.append(gender)
+    face_net = cv2.dnn.readNet(face_model, face_proto)
+    age_net = cv2.dnn.readNet(age_model, age_proto)
+    gender_net = cv2.dnn.readNet(gender_model, gender_proto)
 
-        # Update gender count
-        if gender == 'Male':
-            male_count += 1
-        else:
-            female_count += 1
+    video = cv2.VideoCapture(args.image if args.image else 0)
+    if not video.isOpened():
+        raise RuntimeError("Could not open the camera or video file.")
 
-        ageNet.setInput(blob)
-        agePreds = ageNet.forward()
-        age = ageList[agePreds[0].argmax()]
-        print(f'Gender: {gender}, Age: {age[1:-1]} years')
+    padding = 20
 
-        cv2.putText(resultImg, f'{gender}, {age}', (faceBox[0], faceBox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+    try:
+        while True:
+            has_frame, frame = video.read()
+            if not has_frame:
+                break
 
-        # Detect hands near the face
-        hands = detectHands(frame, faceBox)
-        for hand in hands:
-            cv2.rectangle(resultImg, (hand[0], hand[1]), (hand[2], hand[3]), (255, 0, 0), 2)
+            result_img, face_boxes = highlight_face(face_net, frame)
+            male_count = female_count = 0
 
-        # Check for SOS gesture
-        if checkSOSGesture(faceBox, hands):
-            cv2.putText(resultImg, "SOS Detected!", (faceBox[0], faceBox[1] - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+            for face_box in face_boxes:
+                x1, y1, x2, y2 = face_box
+                face = frame[
+                    max(0, y1 - padding): min(y2 + padding, frame.shape[0]),
+                    max(0, x1 - padding): min(x2 + padding, frame.shape[1]),
+                ]
+                if face.size == 0:
+                    continue
 
-    # Display the gender counts on the frame
-    cv2.putText(resultImg, f'Male: {male_count}, Female: {female_count}', (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
-    cv2.imshow("Detecting age and gender", resultImg)
+                blob = cv2.dnn.blobFromImage(
+                    face, 1.0, (227, 227), model_mean_values, swapRB=False
+                )
+
+                gender_net.setInput(blob)
+                gender = gender_list[int(gender_net.forward()[0].argmax())]
+                male_count += gender == "Male"
+                female_count += gender == "Female"
+
+                age_net.setInput(blob)
+                age = age_list[int(age_net.forward()[0].argmax())]
+                print(f"Gender: {gender}, Age: {age[1:-1]} years")
+
+                cv2.putText(
+                    result_img, f"{gender}, {age}", (x1, max(20, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA
+                )
+
+                hands = detect_hands(frame, face_box)
+                for hx1, hy1, hx2, hy2 in hands:
+                    cv2.rectangle(result_img, (hx1, hy1), (hx2, hy2), (255, 0, 0), 2)
+
+                if check_sos_gesture(face_box, hands):
+                    cv2.putText(
+                        result_img, "SOS Detected!", (x1, max(30, y1 - 50)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA
+                    )
+
+            cv2.putText(
+                result_img, f"Male: {male_count}, Female: {female_count}",
+                (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA
+            )
+            cv2.imshow("Detection Demo", result_img)
+
+            if cv2.waitKey(1) & 0xFF in (27, ord("q")):
+                break
+    finally:
+        video.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
